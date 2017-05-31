@@ -77,10 +77,10 @@ module Replicate
         options = reflection.options
         if options[:polymorphic]
           reference_class =
-            if ::ActiveRecord::VERSION::MAJOR == 3 && ::ActiveRecord::VERSION::MINOR > 0
-              attributes[reflection.foreign_type]
-            else
+            if attributes[options[:foreign_type]]
               attributes[options[:foreign_type]]
+            else
+              attributes[reflection.foreign_type]
             end
           return if reference_class.nil?
 
@@ -167,7 +167,9 @@ module Replicate
           if reflection.macro == :has_and_belongs_to_many
             dump_has_and_belongs_to_many_replicant(dumper, reflection)
           end
-          __send__(reflection.name).reset # clear to allow GC
+          if objects.respond_to? :reset
+            __send__(reflection.name).reset # clear to allow GC
+          end
         else
           warn "error: #{self.class}##{association} is invalid"
         end
@@ -269,7 +271,11 @@ module Replicate
         replicate_natural_key.each do |attribute_name|
           conditions[attribute_name] = attributes[attribute_name.to_s]
         end
-        find(:first, :conditions => conditions)
+        if ::ActiveRecord::VERSION::MAJOR >= 4
+          where(conditions).first
+        else
+          find(:first, :conditions => conditions)
+        end
       end
 
       # Update an AR object's attributes and persist to the database without
@@ -300,12 +306,12 @@ module Replicate
       def replicate_disable_callbacks(instance)
         if ::ActiveRecord::VERSION::MAJOR >= 3
           # AR 3.1.x
-          def instance.run_callbacks(*args); yield; end
+          def instance.run_callbacks(*args); yield if block_given?; end
 
           # AR 3.0.x
-          def instance._run_save_callbacks(*args); yield; end
-          def instance._run_create_callbacks(*args); yield; end
-          def instance._run_update_callbacks(*args); yield; end
+          def instance._run_save_callbacks(*args); yield if block_given?; end
+          def instance._run_create_callbacks(*args); yield if block_given?; end
+          def instance._run_update_callbacks(*args); yield if block_given?; end
         else
           # AR 2.x
           def instance.callback(*args)
@@ -353,24 +359,6 @@ module Replicate
         ids    = attrs['collection']
         object.__send__("#{attrs['ref_name'].to_s.singularize}_ids=", ids)
         [id, new(object, nil)]
-      end
-    end
-
-    # Backport connection.enable_query_cache! for Rails 2.x
-    require 'active_record/connection_adapters/abstract/query_cache'
-    query_cache = ::ActiveRecord::ConnectionAdapters::QueryCache
-    if !query_cache.methods.any? { |m| m.to_sym == :enable_query_cache! }
-      query_cache.module_eval do
-        attr_writer :query_cache, :query_cache_enabled
-
-        def enable_query_cache!
-          @query_cache ||= {}
-          @query_cache_enabled = true
-        end
-
-        def disable_query_cache!
-          @query_cache_enabled = false
-        end
       end
     end
 
